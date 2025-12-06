@@ -1,0 +1,33 @@
+Description: Simple infrastructure with VPC, Subnet, S3 Bucket, and EC2 Instance
+Resources:
+  MyEC2Instance:
+    Properties:
+      InstanceType: t2.micro
+      SubnetId: !Ref 'MySubnet'
+      ImageId: ami-03852a41f1e05c8e4
+      Tags:
+        - Key: Name
+          Value: MyEC2Instance
+    Type: AWS::EC2::Instance
+  MyS3Bucket:
+    Properties:
+      BucketName: my-unique-bucket-name-1234567890
+    Type: AWS::S3::Bucket
+  MySubnet:
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MySubnet
+      VpcId: !Ref 'MyVPC'
+    Type: AWS::EC2::Subnet
+  MyVPC:
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+    Type: AWS::EC2::VPC
