@@ -35,7 +35,7 @@ my_bucket = t.add_resource(s3.Bucket(
 my_instance = t.add_resource(ec2.Instance(
     "MyEC2Instance",
     InstanceType="t2.micro",
-    # ImageId="ami-0c55b159cbfafe1f0",
+    ImageId="ami-03852a41f1e05c8e4",
     SubnetId=Ref(my_subnet),
     Tags=[ec2.Tag("Name", "MyEC2Instance")]
     ))
