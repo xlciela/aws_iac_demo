@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Gateway VPC Endpoint for S3"
+
+Resources:
+  # VPC
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  # Private Subnet
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.1.0/24"
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref "AWS::Region"
+  privateSub2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.2.0/24"
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref "AWS::Region"
+  # Route Table
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table
+  privateRtb2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table 2
+
+  # Route Table Association
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  subRoute2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref privateSub2
+      RouteTableId: !Ref privateRtb2
+
+  # Gateway VPC Endpoint for S3
+  # 当你创建Gateway VPC Endpoint时，AWS会 自动 在指定的路由表中添加路由条目，你不需要手动创建 AWS::EC2::Route 资源。
+  # 具体工作原理：
+  # - 创建Gateway Endpoint时，通过 RouteTableIds 指定路由表
+  # - AWS自动在这些路由表中插入指向S3服务的路由条目
+  # - 路由条目格式类似： pl-xxxxxxxx (S3 prefix list) -> vpce-xxxxxxxx
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcId: !Ref MyVPC
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        # 可以指定多个子网, 同时授予它们对于目标资源的访问权限
+        - !Ref PrivateRouteTable
+        - !Ref privateRtb2
+
+Outputs:
+  VPCEndpointId:
+    Description: Gateway VPC Endpoint ID for S3
+    Value: !Ref S3GatewayEndpoint

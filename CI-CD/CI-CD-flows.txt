@@ -1,0 +1,138 @@
+GitHub/GitLab → CodePipeline → CodeBuild → CodeDeploy → EC2
+     ↓              ↓            ↓           ↓         ↓
+   Webhook    Service Role  Service Role Service Role Instance Profile
+-------------
+1. Source Code (GitHub) 
+   ↓
+2. CodeBuild (Build Process)
+   - Compile code
+   - Run tests  
+   - Package into artifact (.zip)
+   ↓
+3. S3 Bucket (Artifact Storage)
+   - Stores the .zip file
+   ↓
+4. CodeDeploy (Deployment Orchestration)
+   - Tells EC2: "Download artifact X from S3"
+   - Manages deployment process
+   ↓
+5. EC2 Instance (Deployment Target)
+   - Downloads .zip from S3
+   - Extracts files
+   - Runs deployment scripts (appspec.yml)
+   
+-------------------------
+step1. preparation: IAM work
+- ~create IAM user~
+- Create IAM Role for CodePipeline
+- Create IAM Role for CodeBuild with permissions to access S3 and CodeDeploy
+- Create IAM Role for CodeDeploy with permissions to access S3 and EC2
+- Create IAM Role for EC2 with permissions to access S3
+
+step2. preparation: S3 bucket
+- Create an S3 bucket to store build artifacts
+- Configure bucket policies to allow access from CodeBuild and CodeDeploy
+- Enable versioning for better artifact management
+- Set up lifecycle policies to manage storage costs
+- Enable server-side encryption for data security
+- Configure logging for access monitoring
+
+step3. preparation: EC2 instance
+- Launch an EC2 instance
+- Attach the IAM Role created for EC2 to the instance
+- Install CodeDeploy agent on the EC2 instance (Name: CI-CD-Show)
+   ```
+   #!/bin/bash
+   sudo yum update -y
+   sudo yum install ruby -y
+   sudo yum install wget -y
+   cd /home/ec2-user
+   wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
+   chmod +x ./install
+   #sudo ./install auto
+   ```
+- Start the CodeDeploy agent
+   ```  
+   sudo service codedeploy-agent start
+   ```
+step4. work on CodeCommit
+- Create a CodeCommit repository
+- Install git locally
+- Clone the repository locally
+   - edit locally, then use git add -A, git commit -m comment:string, git push
+
+step5. necessary scripts for deployment
+- appspec.yml (defines deployment actions)   
+   ```
+   version: 0.0
+   os: linux
+   files:
+     - source: /
+       destination: /home/ec2-user/CI-CD-Show
+   hooks:
+      BeforeInstall:
+         - location: scripts/install_dependencies
+           timeout: 300
+           runas: root
+         - location: scripts/start_service
+           timeout: 300
+           runas: root
+      ApplicationStop:
+         - location: scripts/stop_service
+           timeout: 300
+           runas: root
+   ```
+- scripts: .sh
+   - install_dependencies (install necessary packages)
+   - start_service (start the application/service)
+   - stop_service (stop the application/service)
+
+step6. create CodeBuild project
+   - Create a new CodeBuild project
+   - Configure source to point to CodeCommit repository
+   - Set environment to use a managed image (e.g., Ubuntu)
+   - Configure buildspec.yml (build instructions)
+   ```
+   version: 0.2
+   phases:
+     install:
+       commands:
+         - echo Installing dependencies...
+         - apt-get update
+         - apt-get install -y zip
+     build:
+       commands:
+         - echo Building the application...
+         - zip -r CI-CD-Show.zip .
+     post_build:
+       commands:
+         - echo Build completed on `date`
+         - echo Uploading artifact to S3...
+         - aws s3 cp CI-CD-Show.zip s3://your-s3-bucket-name/
+   artifacts:
+       files:
+          - CI-CD-Show.zip
+   ```
+
+step7. create CodeDeploy application
+   - Create a new CodeDeploy application
+   - Create a deployment group(部署组: ASG | EC2 instances | *)
+     - Select EC2 instances by tag or name
+     - Attach the IAM Role(CodeDeployServiceRole) created for CodeDeploy
+     - Decide deployment type: real-time| blue/green(deploment on new EC2 instances, then...)
+
+step8. create CodePipeline
+   - Create a new CodePipeline
+   - Set source stage to : CodeCommit repository | GitHub | AmazonECR |...
+      - Set check method: Amazon CloudWatch Events | AWS CodePipeline
+   - *Add build stage with the CodeBuild project
+   - Add deploy stage with the CodeDeploy application and deployment group
+      - Deployment Approach: CloudFormation | CodeDeploy(deploy app, deployment group) | ECS | ...
+   - Review and create the pipeline
+
+step9. test the pipeline
+   - Make changes to the CodeCommit repository
+   - Commit and push changes
+   - Monitor the pipeline execution in CodePipeline console
+   - Verify deployment on the EC2 instance
+-------------------------

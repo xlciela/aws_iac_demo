@@ -1,0 +1,14 @@
+# 验证脚本 - 部署后运行以下命令查看自动添加的路由
+
+# 1. 获取路由表ID
+aws ec2 describe-route-tables --filters "Name=tag:Name,Values=Private Route Table"
+
+# 2. 查看路由表详情（会显示自动添加的S3路由）
+aws ec2 describe-route-tables --route-table-ids rtb-xxxxxxxxx
+
+# 3. 查看VPC Endpoint详情
+aws ec2 describe-vpc-endpoints --filters "Name=service-name,Values=com.amazonaws.ap-northeast-1.s3"
+
+# 预期结果：路由表中会自动出现类似这样的条目：
+# Destination: pl-61a54008 (S3 prefix list)
+# Target: vpce-xxxxxxxxx (Gateway Endpoint ID)

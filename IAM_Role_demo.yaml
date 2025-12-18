@@ -1,0 +1,92 @@
+Resources:
+  # 1. EC2 instance @Instance Profile(IAM Role)
+  # 合并多种权限的IAM Role
+  EC2MultiPermissionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy  # CloudWatch权限
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess       # S3读取权限
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore # SSM权限
+
+  # Instance Profile只能包含一个Role
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2MultiPermissionRole  # 只能有一个！
+
+  # EC2实例( with CloudWatch agent)使用Instance Profile
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0d52744d6551d851e # Amazon Linux 2
+      InstanceType: t3.micro
+      SubnetId: !Ref privateSub
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          # Install CloudWatch Agent
+          wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+          rpm -U ./amazon-cloudwatch-agent.rpm
+          # Start CloudWatch Agent with basic config
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c default
+
+  # 2. other AWS Services @IAM Role directly
+  # Lambda直接使用IAM Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn # 直接使用Role ARN
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200}
+
+  # ECS Task直接使用IAM Role
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: my-task
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn # 直接使用Role ARN
+      ContainerDefinitions:
+        - Name: my-container
+          Image: nginx
+          Memory: 512

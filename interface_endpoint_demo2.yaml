@@ -1,0 +1,59 @@
+Resources:
+  # VPC and subnets
+  myvpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: myvpc
+  subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myvpc
+      MapPublicIpOnLaunch: true
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      Tags:
+        - Key: Name
+          Value: subnet1
+  subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myvpc
+      MapPublicIpOnLaunch: true
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      Tags:
+        - Key: Name
+          Value: subnet2
+
+  # interface endpoint
+  # 本质上是在指定的子网中配置 ENI弹性网络接口实体, 其具有私有IP地址
+  # => ENI需要SG控制ingress/egress流量
+  #   => necessary sg-rule: allow 443(HTTPS)
+  vpcedp:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      VpcEndpointType: Interface
+      VpcId: !Ref myvpc
+      ServiceName: com.amazonaws.us-east-1.service
+      SecurityGroupIds:
+        - !GetAtt "sgdp.GroupId" # == !Ref sgdp
+      SubnetIds:
+        - !Ref subnet1
+        - !Ref subnet2
+  # security group to be used with the VPC endpoint
+  sgdp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: String
+      GroupName: sg-edp-1
+      VpcId: !Ref myvpc
+      Tags:
+        - Key: Name
+          Value: sg-edp-1

@@ -1,28 +1,80 @@
 Description: Simple infrastructure with VPC, Subnet, S3 Bucket, and EC2 Instance
+
 Resources:
   MyEC2Instance:
+    Type: AWS::EC2::Instance
     Properties:
       InstanceType: t2.micro
-      SubnetId: !Ref 'MySubnet'
       ImageId: ami-03852a41f1e05c8e4
+      KeyName: null
       Tags:
         - Key: Name
-          Value: MyEC2Instance
-    Type: AWS::EC2::Instance
+          Value: ec2-01
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          DeviceIndex: 0
+          SubnetId: !Ref MySubnet
+          GroupSet:
+            - !Ref publicSG
+  ec2Eip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref MyEC2Instance
+
+  # create s3 bucket
   MyS3Bucket:
+    Type: AWS::S3::Bucket
     Properties:
       BucketName: my-unique-bucket-name-1234567890
-    Type: AWS::S3::Bucket
+      LifecycleConfiguration:
+        Rules:
+          - ExpirationInDays: "184"
+            Id: logcollect_rule
+            Prefix: logcollect/
+            Status: Enabled
+      # OwnershipControls:
+      #   Rules:
+      #     - ObjectOwnership: BucketOwnerPreferred
+      VersioningConfiguration:
+        Status: Suspended
+
+  # TODO: ?
+  MyS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MyS3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: !Join
+              - ""
+              - - "arn:aws:s3:::"
+                - !Ref MyS3Bucket
+                - /*
+            Condition:
+              NotIpAddress:
+                aws:SourceIp:
+                  - 136.226.238.0/23
+                  - 147.161.192.0/23
+              StringNotEquals:
+                aws:sourceVpc: !Ref MyVPC
+
   MySubnet:
+    Type: AWS::EC2::Subnet
     Properties:
       CidrBlock: 10.0.0.0/24
-      MapPublicIpOnLaunch: true
+      # MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
           Value: MySubnet
-      VpcId: !Ref 'MyVPC'
-    Type: AWS::EC2::Subnet
+      VpcId: !Ref MyVPC
   MyVPC:
+    Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
       EnableDnsHostnames: true
@@ -30,4 +82,68 @@ Resources:
       Tags:
         - Key: Name
           Value: MyVPC
-    Type: AWS::EC2::VPC
+  # create igw node
+  MyIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: my-test-igw
+
+  # crete igw.attachment(igwNode, Vpc)
+  MyTestAttachIgw:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyIgw
+
+  # create rtb and rt to direct traffic from public subnet to igw
+  # create rtb under an VPC
+  MyTestPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: my-test-public-route-table
+
+  # create rtb.attachment(rtb, target_subnet)
+  MyTestRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref MyTestPublicRouteTable
+      SubnetId: !Ref MySubnet
+
+  # create rtb.route : 路由表设置默认路由指向IGW
+  MyTestInternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref MyTestPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0 # traffic range
+      GatewayId: !Ref MyIgw # next
+
+  # create SGs for the EC2 instance
+  publicSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG to test ping
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: 0.0.0.0/0
+
+  # out put the public of the EC2 instance
+Outputs:
+  PublicIp:
+    Description: Public IP of the EC2 instance
+    Value: !GetAtt MyEC2Instance.PublicIp

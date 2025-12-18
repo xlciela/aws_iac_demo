@@ -1,0 +1,132 @@
+Resources:
+  # N/W VPC and subnets
+  myvpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: "default"
+  publicSub:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myvpc
+      MapPublicIpOnLaunch: true
+      CidrBlock: "10.0.0.0/24"
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref "AWS::Region"
+  privateSub:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myvpc
+      CidrBlock: "10.0.1.0/24"
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref "AWS::Region"
+  privateSub2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myvpc
+      CidrBlock: "10.0.2.0/24"
+      AvailabilityZone: !Select
+        - 2
+        - Fn::GetAZs: !Ref "AWS::Region"
+
+  # Gateway VPC Endpoint direct traffic@rtb's rt entries
+  vpcedp:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcId: !Ref myvpc
+      RouteTableIds:
+        - !Ref myrt # 哪个子网需要访问S3就关联对应子网绑定的路由表,
+        # if the RTB is associated with multiple subnets, the S3 bucket will be accessed by all subnets
+
+  # interface VPC Endpoint : traffic@PrivateLink ( Subnet, ENI with private IP, SGs)
+  # create ENI in subnets with private IP: need SubnetId, SecurityGroupId
+  vpcedp2:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      ServiceName: "com.amazonaws.ap-northeast-1.monitoring"
+      SecurityGroupIds:
+        - !GetAtt sg02.GroupId
+      VpcEndpointType: "Interface"
+      SubnetIds:
+        - !Ref privateSub
+        - !Ref privateSub2
+      VpcId: !Ref myvpc
+
+  # Security Group for VPC Endpoint
+  sg02:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for VPC Endpoint"
+      VpcId: !Ref myvpc
+      SecurityGroupIngress:
+        # Allow HTTPS traffic from VPC CIDR for CloudWatch monitoring
+        - IpProtocol: "tcp"
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "10.0.0.0/16"
+      SecurityGroupEgress:
+        # Allow outbound HTTPS traffic
+        - IpProtocol: "tcp"
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+
+  # rtb
+  rtb01:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myvpc
+
+  # association
+  myrt:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref privateSub
+      RouteTableId: !Ref rtb01
+
+  # IAM Role for CloudWatch Agent
+  CloudWatchAgentRoleAndS3Access:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess       # S3读取权限
+
+
+  # 创建Instance Profile - 包装角色
+  CloudWatchAgentInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref CloudWatchAgentRole
+
+  # EC2实例( with CloudWatch agent)使用Instance Profile
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0d52744d6551d851e # Amazon Linux 2
+      InstanceType: t3.micro
+      SubnetId: !Ref privateSub
+      IamInstanceProfile: !Ref CloudWatchAgentInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          # Install CloudWatch Agent
+          wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+          rpm -U ./amazon-cloudwatch-agent.rpm
+          # Start CloudWatch Agent with basic config
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c default

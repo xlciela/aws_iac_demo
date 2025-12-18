@@ -50,6 +50,7 @@ private_subnet = t.add_resource(ec2.Subnet(
     "PrivateSubnet",
     CidrBlock="10.0.1.0/24", # available IP_count = 254
     MapPublicIpOnLaunch=False,
+    VpcId=Ref(vpc),
     Tags=[ec2.Tag('Name', 'private-subnet')] 
 ))
 
@@ -73,7 +74,7 @@ t.add_resource(ec2.Route(
 t.add_resource(ec2.SubnetRouteTableAssociation(
     "PublicSubnetRTAssoc",
     SubnetId=Ref(public_subnet),
-    RouteTableId=(public_rt)
+    RouteTableId=Ref(public_rt)
 ))
 
 # 5. NAT(in public_subnet)

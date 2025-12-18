@@ -1,0 +1,180 @@
+Parameters:
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket for storing build artifacts
+  CodeBuildProjectArn:
+    Type: String
+    Description: ARN of the CodeBuild project
+
+Resources:
+  # IAM Role with AWSCodeCommitFullAccess policy and AWSCodeDeployFullAccess policy
+  # demoRole: # IAM User vs IAM Role( maybe should be IAM user instead of Role?)
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: ec2.amazonaws.com
+  #           Action: sts:AssumeRole
+  #     ManagedPolicyArns:
+  #       - arn:aws:iam::aws:policy/AWSCodeCommitFullAccess
+  #       - arn:aws:iam::aws:policy/AWSCodeDeployFullAccess
+  # 1. CodePipeline @CodePipelineServiceRole
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub "${ArtifactBucket}/*" # object level access -> read/write from the bucket
+                  - !Ref ArtifactBucket # bucket level access -> get info about the bucket( like versioning)
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !Ref CodeBuildProjectArn
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetRepository
+                  - codecommit:ListBranches
+                  - codecommit:ListRepositories
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                Resource: "*"
+  # 2. CodeBuild @CodeBuildServiceRole
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow # CloudWatch Logs permissions
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow # S3 permissions for storing build artifacts
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${ArtifactBucket}/*"
+
+  # 3. CodeDeploy @CodeDeployServiceRole -> manage deployment -> CodeDeploy permissions
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      Policies: # Custom policy with restricted S3 access
+        - PolicyName: CodeDeployCustomPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow # EC2 and Auto Scaling permissions
+                Action:
+                  - ec2:CreateTags
+                  - ec2:DescribeInstances
+                  - autoscaling:*
+                  - elasticloadbalancing:*
+                Resource: "*"
+              - Effect: Allow # S3 access restricted to artifact bucket only
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "${ArtifactBucket}/*"
+                  - !Ref ArtifactBucket
+
+  # 4. EC2 Instance Role ( deployment targets)
+  # -> downloads artifacts from S3 and runs deployment scripts -> S3 Access permissions
+  # 4.1  IAM Role with AmazonS3FullAccess policy
+  s3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # S3读取权限 ( access to all S3 buckets, not secure for production)
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+  # wrapping s3AccessRole into Instance Profile
+  EC2InstanceProfile1:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref s3AccessRole
+  # 4.2 best practice: custom IAM Role with specific S3 bucket access + CloudWatch + SSM
+  EC2DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMMangedInstanceCore
+      Policies: # custom inline policy for S3 access( restricted to specific bucket)
+        - PolicyName: S3ArtifactAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject # only need to download artifact
+                Resource: !Sub "${ArtifactBucket}/*"
+  # Instance Profile for EC2 Instances
+  EC2InstanceProfile2:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2DeploymentRole
