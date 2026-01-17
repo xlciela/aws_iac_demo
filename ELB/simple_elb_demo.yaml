@@ -1,0 +1,107 @@
+Resources:
+  # ELB 1 - Network Load Balancer
+  myelb1:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: simple-elb-01
+      Type: network
+      Scheme: internal
+      Subnets:
+        - !Ref publicSub
+        - !Ref publicSub2
+
+  myelb2:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: simple-elb-02
+      Type: application
+      Scheme: internal
+      Subnets:
+        - !Ref publicSub
+        - !Ref publicSub2
+
+  # Target Group 1 - 指向同一个EC2实例
+  elb01tg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: simple-elb-tg-01
+      Port: 80 # backend port for the targetGroup
+      Protocol: TCP
+      VpcId: !Ref myvpc
+      HealthCheckProtocol: TCP
+      HealthCheckPort: '80'
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      TargetType: instance
+      Targets:
+        - Id: !Ref MyEC2Instance
+          Port: 80 # actual port on the EC2 instance
+
+  # Target Group 2 - 指向同一个EC2实例的同一个端口
+  elb02tg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: simple-elb-tg-02
+      Port: 8080 # default port of the targetGroup
+      Protocol: HTTP
+      VpcId: !Ref myvpc
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health # HTTP/HTTPS Port -> need to specify health check path
+      HealthCheckPort: '9000' # 应该检查实际目标端口
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      TargetType: instance
+      Targets:
+        - Id: !Ref MyEC2Instance
+          Port: 9000 # actual port on the EC2 instance overriding the default port
+
+  # Listener for ELB1 - 监听80端口
+  elb01lsn:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref myelb1
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref elb01tg
+      Port: 80
+      Protocol: TCP
+
+  # Listener for ELB2 - 使用不同端口避免冲突
+  elb02lsn8080:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref myelb2
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref elb02tg
+      Port: 8080
+      Protocol: HTTP # 修正为HTTP协议
+  elb02lsn443:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref myelb2
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref elb02tg
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref myCertArn
+  # EC2 Instance
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-0c55b159cbfafe1f0 # Amazon Linux 2 AMI (HVM), SSD Volume Type
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: '0'
+          SubnetId: !Ref publicSub
+          GroupSet:
+            - !Ref mySecurityGroup

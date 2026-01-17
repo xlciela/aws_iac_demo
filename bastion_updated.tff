@@ -1,0 +1,49 @@
+;踏み台サーバ接続情報
+HOSTADDR = 'ec2-13-113-180-171-ap-northeast-1.compute.amazonaws.com'
+USERNAME = 'ec2-user'
+;KEY FILE = 'Vibkfs06.ns1.ad.nec.co.jp¥101665-01VAPIOserV90 API-SV.pem'
+;KEY FILE= 'USERPROFILE% Box¥101665-01 VAP10ser¥90 '
+getdir DIR
+sprintf2 KEY_FILE '%sV-7VSLGSV-pem' DIR
+
+;個社接続情報
+USERNAME_NECDEV01 = 'necdev01'
+HOSTADDR_KOSHA = '10.141.1.12'
+PASSWORD_KOSHA = 'gQ7n6Srg'
+
+;apiuser接続情報
+USERNAME_APIUSER = 'apiuser'
+PASSWORD_APIUSER = '291Lix8K'
+HOSTADDR_API = '103.131.144.19'
+
+;apigwuser接続情報
+USERNAME_APIGWUSER = 'apigwuser'
+PASSWORD_APIGWUSER = '291Lix8K'
+
+; 踏み台サーバに接続
+COMMAND = HOSTADDR
+strconcat COMMAND ':22/ssh/2/auth-publickey /user='
+strconcat COMMAND USERNAME
+strconcat COMMAND '/keyfile='
+strconcat COMMAND KEY_FILE
+connect COMMAND
+wait '$' '#'
+
+; APIユーザーに接続（パスワード認証）
+COMMAND = 'ssh '
+strconcat COMMAND USERNAME_APIUSER
+strconcat COMMAND '@'
+strconcat COMMAND HOSTADDR_API
+sendln COMMAND
+wait 'password:'
+sendln PASSWORD_APIUSER
+wait '$' '#'
+
+; または、個社環境に接続
+;COMMAND = 'ssh '
+;strconcat COMMAND USERNAME_NECDEV01
+;strconcat COMMAND '@'
+;strconcat COMMAND HOSTADDR_KOSHA
+;sendln COMMAND
+;wait 'password:'
+;sendln PASSWORD_KOSHA

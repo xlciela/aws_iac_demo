@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EC2实例与预配置的apiuser用户'
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'EC2密钥对名称'
+  
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: 'EC2实例类型'
+
+Resources:
+  # VPC配置
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  # 公共子网
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: PublicSubnet
+
+  # 互联网网关
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyIGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # 路由表
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # 安全组
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'SSH访问安全组'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: 'SSH访问'
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+          Description: 'ICMP ping'
+      Tags:
+        - Key: Name
+          Value: SSH-SG
+
+  # EC2实例
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-03852a41f1e05c8e4  # Amazon Linux 2023
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref SSHSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          
+          # 创建apiuser用户
+          useradd -m -s /bin/bash apiuser
+          
+          # 设置apiuser密码
+          echo "apiuser:291Lix8K" | chpasswd
+          
+          # 创建.ssh目录
+          mkdir -p /home/apiuser/.ssh
+          chmod 700 /home/apiuser/.ssh
+          
+          # 复制ec2-user的authorized_keys到apiuser
+          if [ -f /home/ec2-user/.ssh/authorized_keys ]; then
+              cp /home/ec2-user/.ssh/authorized_keys /home/apiuser/.ssh/
+              chmod 600 /home/apiuser/.ssh/authorized_keys
+              chown -R apiuser:apiuser /home/apiuser/.ssh
+          fi
+          
+          # 配置SSHD
+          cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+          
+          # 启用密码认证
+          sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          
+          # 启用公钥认证
+          sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+          
+          # 允许用户登录
+          if ! grep -q "AllowUsers" /etc/ssh/sshd_config; then
+              echo "AllowUsers ec2-user apiuser" >> /etc/ssh/sshd_config
+          fi
+          
+          # 重启SSH服务
+          systemctl restart sshd
+          
+          # 创建apigwuser用户（从您的配置文件中看到的）
+          useradd -m -s /bin/bash apigwuser
+          echo "apigwuser:291Lix8K" | chpasswd
+          
+          # 为apigwuser配置SSH
+          mkdir -p /home/apigwuser/.ssh
+          chmod 700 /home/apigwuser/.ssh
+          if [ -f /home/ec2-user/.ssh/authorized_keys ]; then
+              cp /home/ec2-user/.ssh/authorized_keys /home/apigwuser/.ssh/
+              chmod 600 /home/apigwuser/.ssh/authorized_keys
+              chown -R apigwuser:apigwuser /home/apigwuser/.ssh
+          fi
+          
+          # 更新AllowUsers包含apigwuser
+          sed -i 's/AllowUsers ec2-user apiuser/AllowUsers ec2-user apiuser apigwuser/' /etc/ssh/sshd_config
+          systemctl restart sshd
+          
+      Tags:
+        - Key: Name
+          Value: BastionHost
+
+  # 弹性IP
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref EC2Instance
+
+Outputs:
+  InstanceId:
+    Description: 'EC2实例ID'
+    Value: !Ref EC2Instance
+    
+  PublicIP:
+    Description: '实例公网IP'
+    Value: !Ref ElasticIP
+    
+  SSHCommand:
+    Description: 'SSH连接命令'
+    Value: !Sub 'ssh -i your-key.pem apiuser@${ElasticIP}'
+    
+  PasswordSSHCommand:
+    Description: '密码SSH连接命令'
+    Value: !Sub 'ssh apiuser@${ElasticIP}'

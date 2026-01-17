@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EC2 with auto recovery'
+
+Resources:
+  AutoRecoveryEC2tp01:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-03852a41f1e05c8e4
+      Tags:
+        - Key: Name
+          Value: AutoRecoveryEC2tp01
+
+  # CPU高时自动恢复
+  CPURecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: EC2-CPU-Recovery-tp01
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 90
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref AutoRecoveryEC2tp01
+      AlarmActions:
+        - !Sub "arn:aws:automate:${AWS::Region}:ec2:recover"
+
+  # 状态检查失败时自动恢复
+  StatusCheckRecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: EC2-StatusCheck-Recovery-tp01
+      MetricName: StatusCheckFailed_System
+      Namespace: AWS/EC2
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref AutoRecoveryEC2tp01
+      AlarmActions:
+        - !Sub "arn:aws:automate:${AWS::Region}:ec2:recover"
+

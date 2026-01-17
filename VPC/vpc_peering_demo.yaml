@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'VPC Peering Demo - 两个VPC之间建立Peering连接并配置路由'
+
+Resources:
+  # ========== VPC A (10.0.0.0/16) ==========
+  VpcA:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: VPC-A
+
+  # VPC A 的子网
+  VpcAPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcA
+      CidrBlock: "10.0.1.0/24"
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPC-A-Public-Subnet
+
+  VpcAPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcA
+      CidrBlock: "10.0.2.0/24"
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPC-A-Private-Subnet
+
+  # ========== VPC B (10.1.0.0/16) ==========
+  VpcB:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.1.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: VPC-B
+
+  # VPC B 的子网
+  VpcBPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcB
+      CidrBlock: "10.1.1.0/24"
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPC-B-Public-Subnet
+
+  VpcBPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcB
+      CidrBlock: "10.1.2.0/24"
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPC-B-Private-Subnet
+
+  # ========== VPC Peering 连接 ==========
+  VpcPeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref VpcA
+      PeerVpcId: !Ref VpcB
+      Tags:
+        - Key: Name
+          Value: VPC-A-to-VPC-B-Peering
+
+  # ========== 路由表配置 ==========
+  # VPC A 的路由表
+  VpcARouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcA
+      Tags:
+        - Key: Name
+          Value: VPC-A-RouteTable
+
+  # VPC A 到 VPC B 的路由
+  VpcAToVpcBRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcPeeringConnection
+    Properties:
+      RouteTableId: !Ref VpcARouteTable
+      DestinationCidrBlock: "10.1.0.0/16"  # VPC B 的CIDR
+      VpcPeeringConnectionId: !Ref VpcPeeringConnection
+
+  # VPC B 的路由表
+  VpcBRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcB
+      Tags:
+        - Key: Name
+          Value: VPC-B-RouteTable
+
+  # VPC B 到 VPC A 的路由
+  VpcBToVpcARoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcPeeringConnection
+    Properties:
+      RouteTableId: !Ref VpcBRouteTable
+      DestinationCidrBlock: "10.0.0.0/16"  # VPC A 的CIDR
+      VpcPeeringConnectionId: !Ref VpcPeeringConnection
+
+  # ========== 子网关联路由表 ==========
+  # VPC A 子网关联
+  VpcAPublicSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref VpcAPublicSubnet
+      RouteTableId: !Ref VpcARouteTable
+
+  VpcAPrivateSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref VpcAPrivateSubnet
+      RouteTableId: !Ref VpcARouteTable
+
+  # VPC B 子网关联
+  VpcBPublicSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref VpcBPublicSubnet
+      RouteTableId: !Ref VpcBRouteTable
+
+  VpcBPrivateSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref VpcBPrivateSubnet
+      RouteTableId: !Ref VpcBRouteTable
+
+  # ========== 安全组配置 ==========
+  # VPC A 安全组 - 允许来自VPC B的流量
+  VpcASecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "VPC A Security Group - Allow traffic from VPC B"
+      VpcId: !Ref VpcA
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "10.1.0.0/16"  # 允许VPC B的SSH访问
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: "10.1.0.0/16"  # 允许VPC B的ping
+      Tags:
+        - Key: Name
+          Value: VPC-A-SecurityGroup
+
+  # VPC B 安全组 - 允许来自VPC A的流量
+  VpcBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "VPC B Security Group - Allow traffic from VPC A"
+      VpcId: !Ref VpcB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "10.0.0.0/16"  # 允许VPC A的SSH访问
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: "10.0.0.0/16"  # 允许VPC A的ping
+      Tags:
+        - Key: Name
+          Value: VPC-B-SecurityGroup
+
+  # ========== 测试用EC2实例 ==========
+  # VPC A 中的测试实例
+  VpcATestInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0d52744d6551d851e  # Amazon Linux 2
+      InstanceType: t3.micro
+      SubnetId: !Ref VpcAPrivateSubnet
+      SecurityGroupIds:
+        - !Ref VpcASecurityGroup
+      Tags:
+        - Key: Name
+          Value: VPC-A-Test-Instance
+
+  # VPC B 中的测试实例
+  VpcBTestInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0d52744d6551d851e  # Amazon Linux 2
+      InstanceType: t3.micro
+      SubnetId: !Ref VpcBPrivateSubnet
+      SecurityGroupIds:
+        - !Ref VpcBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: VPC-B-Test-Instance
+
+Outputs:
+  VpcPeeringConnectionId:
+    Description: "VPC Peering Connection ID"
+    Value: !Ref VpcPeeringConnection
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcPeeringConnectionId"
+
+  VpcAId:
+    Description: "VPC A ID"
+    Value: !Ref VpcA
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcAId"
+
+  VpcBId:
+    Description: "VPC B ID"
+    Value: !Ref VpcB
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcBId"
+
+  VpcATestInstancePrivateIp:
+    Description: "VPC A Test Instance Private IP"
+    Value: !GetAtt VpcATestInstance.PrivateIp
+
+  VpcBTestInstancePrivateIp:
+    Description: "VPC B Test Instance Private IP"
+    Value: !GetAtt VpcBTestInstance.PrivateIp

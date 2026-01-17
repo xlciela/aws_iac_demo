@@ -1,138 +1,165 @@
-GitHub/GitLab → CodePipeline → CodeBuild → CodeDeploy → EC2
-     ↓              ↓            ↓           ↓         ↓
-   Webhook    Service Role  Service Role Service Role Instance Profile
+GitHub/GitLab → CodePipeline → CodeBuild → ECR → ECS
+     ↓              ↓            ↓        ↓     ↓
+   Webhook    Service Role  Service Role  Registry  Cluster/Service
 -------------
 1. Source Code (GitHub) 
    ↓
 2. CodeBuild (Build Process)
-   - Compile code
+   - Build Docker image
    - Run tests  
-   - Package into artifact (.zip)
+   - Push image to ECR
    ↓
-3. S3 Bucket (Artifact Storage)
-   - Stores the .zip file
+3. ECR (Container Registry)
+   - Stores Docker images
    ↓
-4. CodeDeploy (Deployment Orchestration)
-   - Tells EC2: "Download artifact X from S3"
-   - Manages deployment process
-   ↓
-5. EC2 Instance (Deployment Target)
-   - Downloads .zip from S3
-   - Extracts files
-   - Runs deployment scripts (appspec.yml)
+4. ECS Service (Deployment Target)
+   - Pulls new image from ECR
+   - Performs rolling update
+   - Manages container lifecycle
    
 -------------------------
 step1. preparation: IAM work
 - ~create IAM user~
 - Create IAM Role for CodePipeline
-- Create IAM Role for CodeBuild with permissions to access S3 and CodeDeploy
-- Create IAM Role for CodeDeploy with permissions to access S3 and EC2
-- Create IAM Role for EC2 with permissions to access S3
+- Create IAM Role for CodeBuild with permissions to access ECR and ECS
+- Create ECS Task Execution Role with permissions to pull images from ECR
+- Create ECS Task Role for application-specific permissions
 
-step2. preparation: S3 bucket
-- Create an S3 bucket to store build artifacts
-- Configure bucket policies to allow access from CodeBuild and CodeDeploy
-- Enable versioning for better artifact management
-- Set up lifecycle policies to manage storage costs
-- Enable server-side encryption for data security
-- Configure logging for access monitoring
+step2. preparation: ECR repository
+- Create an ECR repository to store Docker images
+- Configure repository policies for access control
+- Enable image scanning for security vulnerabilities
+- Set up lifecycle policies to manage image retention
+- Configure cross-region replication if needed
 
-step3. preparation: EC2 instance
-- Launch an EC2 instance
-- Attach the IAM Role created for EC2 to the instance
-- Install CodeDeploy agent on the EC2 instance (Name: CI-CD-Show)
+step3. preparation: ECS cluster and service
+- Create an ECS cluster
+- Create a task definition with container specifications
+   - Define container image (from ECR or Docker Hub)
+   - Set CPU and memory requirements
+   - Configure port mappings
+   - Set environment variables
+- Create an ECS service
+   - Link to the task definition
+   - Set desired task count
+   - Configure load balancer (ALB/NLB) if needed
+   - Set up service discovery if required
+- Create ECR repository to store Docker images
    ```
-   #!/bin/bash
-   sudo yum update -y
-   sudo yum install ruby -y
-   sudo yum install wget -y
-   cd /home/ec2-user
-   wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
-   chmod +x ./install
-   #sudo ./install auto
+   aws ecr create-repository --repository-name ci-cd-show
    ```
-- Start the CodeDeploy agent
-   ```  
-   sudo service codedeploy-agent start
-   ```
+- Configure IAM roles:
+   - ECS Task Execution Role (for pulling images from ECR)
+   - ECS Task Role (for application permissions)
 step4. work on CodeCommit
 - Create a CodeCommit repository
 - Install git locally
 - Clone the repository locally
    - edit locally, then use git add -A, git commit -m comment:string, git push
 
-step5. necessary scripts for deployment
-- appspec.yml (defines deployment actions)   
+step5. necessary files for ECS deployment
+- Dockerfile (defines container image)
    ```
-   version: 0.0
-   os: linux
-   files:
-     - source: /
-       destination: /home/ec2-user/CI-CD-Show
-   hooks:
-      BeforeInstall:
-         - location: scripts/install_dependencies
-           timeout: 300
-           runas: root
-         - location: scripts/start_service
-           timeout: 300
-           runas: root
-      ApplicationStop:
-         - location: scripts/stop_service
-           timeout: 300
-           runas: root
+   FROM node:16-alpine
+   WORKDIR /app
+   COPY package*.json ./
+   RUN npm install
+   COPY . .
+   EXPOSE 3000
+   CMD ["npm", "start"]
    ```
-- scripts: .sh
-   - install_dependencies (install necessary packages)
-   - start_service (start the application/service)
-   - stop_service (stop the application/service)
+- task-definition.json (ECS task definition)
+   ```
+   {
+     "family": "ci-cd-show",
+     "networkMode": "awsvpc",
+     "requiresCompatibilities": ["FARGATE"],
+     "cpu": "256",
+     "memory": "512",
+     "executionRoleArn": "arn:aws:iam::account:role/ecsTaskExecutionRole",
+     "containerDefinitions": [
+       {
+         "name": "ci-cd-show",
+         "image": "account.dkr.ecr.region.amazonaws.com/ci-cd-show:latest",
+         "portMappings": [
+           {
+             "containerPort": 3000,
+             "protocol": "tcp"
+           }
+         ],
+         "essential": true,
+         "logConfiguration": {
+           "logDriver": "awslogs",
+           "options": {
+             "awslogs-group": "/ecs/ci-cd-show",
+             "awslogs-region": "us-east-1",
+             "awslogs-stream-prefix": "ecs"
+           }
+         }
+       }
+     ]
+   }
+   ```
 
 step6. create CodeBuild project
    - Create a new CodeBuild project
    - Configure source to point to CodeCommit repository
-   - Set environment to use a managed image (e.g., Ubuntu)
+   - Set environment to use a managed image with Docker support
+   - Enable privileged mode for Docker builds
    - Configure buildspec.yml (build instructions)
    ```
    version: 0.2
    phases:
-     install:
+     pre_build:
        commands:
-         - echo Installing dependencies...
-         - apt-get update
-         - apt-get install -y zip
+         - echo Logging in to Amazon ECR...
+         - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
      build:
        commands:
-         - echo Building the application...
-         - zip -r CI-CD-Show.zip .
+         - echo Build started on `date`
+         - echo Building the Docker image...
+         - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+         - docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
      post_build:
        commands:
          - echo Build completed on `date`
-         - echo Uploading artifact to S3...
-         - aws s3 cp CI-CD-Show.zip s3://your-s3-bucket-name/
+         - echo Pushing the Docker image...
+         - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+         - echo Writing image definitions file...
+         - printf '[{"name":"ci-cd-show","imageUri":"%s"}]' $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG > imagedefinitions.json
    artifacts:
        files:
-          - CI-CD-Show.zip
+          - imagedefinitions.json
    ```
 
-step7. create CodeDeploy application
-   - Create a new CodeDeploy application
-   - Create a deployment group(部署组: ASG | EC2 instances | *)
-     - Select EC2 instances by tag or name
-     - Attach the IAM Role(CodeDeployServiceRole) created for CodeDeploy
-     - Decide deployment type: real-time| blue/green(deploment on new EC2 instances, then...)
+step7. configure ECS deployment
+   - No need for CodeDeploy application for ECS
+   - ECS service will automatically handle rolling deployments
+   - Configure ECS service update strategy:
+     - Rolling update (default)
+     - Blue/Green deployment (using CodeDeploy for ECS if needed)
+   - Set deployment configuration:
+     - Minimum healthy percent: 50%
+     - Maximum percent: 200%
 
 step8. create CodePipeline
    - Create a new CodePipeline
    - Set source stage to : CodeCommit repository | GitHub | AmazonECR |...
       - Set check method: Amazon CloudWatch Events | AWS CodePipeline
    - *Add build stage with the CodeBuild project
-   - Add deploy stage with the CodeDeploy application and deployment group
-      - Deployment Approach: CloudFormation | CodeDeploy(deploy app, deployment group) | ECS | ...
+   - Add deploy stage with ECS deployment:
+      - Deployment Approach: ECS (deploy to ECS service)
+      - Select ECS cluster and service name
+      - Input artifact: imagedefinitions.json from CodeBuild
    - Review and create the pipeline
 
 step9. test the pipeline
    - Make changes to the CodeCommit repository
    - Commit and push changes
    - Monitor the pipeline execution in CodePipeline console
-   - Verify deployment on the EC2 instance
+   - Verify deployment in ECS console:
+     - Check service status
+     - Monitor task health
+     - View container logs in CloudWatch
+   - Test application through load balancer endpoint
 -------------------------

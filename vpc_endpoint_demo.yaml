@@ -130,3 +130,33 @@ Resources:
           rpm -U ./amazon-cloudwatch-agent.rpm
           # Start CloudWatch Agent with basic config
           /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c default
+
+  # 通过VPC Endpoint 访问私有local service
+  ApiGatewayVPCEndpoint: # 核心配置: Interface VPC Endpoint for API Gateway private access
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.execute-api"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref privateSub
+        - !Ref privateSub2
+      SecurityGroupIds:
+        - !Ref sg02
+      VpcId: !Ref myvpc
+  # Configuration of API Gateway rsources
+  # {
+  #   "Version": "2012-10-17",
+  #   "Statement": [{
+  #     "Effect": "Allow",
+  #     "Principal": "*",
+  #     "Action": "execute-api:Invoke", # 核心配置: allow invoke API Gateway
+  #     "Resource": "*",
+  #     "Condition": {
+  #       "StringEquals": {
+  #         "aws:sourceVpce": "vpce-xxxxxx"
+  #       }
+  #     }
+  #   }]
+  # }
+
+
